@@ -1,0 +1,9 @@
+transformers
+einops
+pillow
+torch
+torchvision
+numpy<2.0
+https://github.com/KurimuzonAkuma/pyrogram/archive/dev.zip
+TgCrypto
+python-dotenv
