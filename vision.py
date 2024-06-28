@@ -1,11 +1,13 @@
-from transformers import AutoModelForCausalLM, AutoTokenizer, logging as hf_logging
-from PIL import Image, ImageOps
-from pyrogram import Client, filters, enums, idle
-import asyncio
-import os, time
+
+import os
+import time
 import logging
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
+from PIL import Image, ImageOps
 from dotenv import load_dotenv
+from pyrogram import Client, filters, enums, idle
+from transformers import AutoModelForCausalLM, AutoTokenizer, logging as hf_logging
+from concurrent.futures import ThreadPoolExecutor
 
 # Load environment variables
 load_dotenv()
@@ -26,8 +28,6 @@ bot = Client(
     skip_updates=True,
 )
 
-# Start message
-
 
 # Logging configuration
 logging.basicConfig(level=logging.INFO)
@@ -43,6 +43,9 @@ autoVision = False
 # Thread pool executor
 executor = ThreadPoolExecutor()
 
+# Asyncio loop
+loop = asyncio.get_running_loop()
+
 # Load model and tokenizer
 hf_logging.set_verbosity_error()  # Suppress logging except errors
 model_id = "vikhyatk/moondream2"
@@ -57,7 +60,7 @@ def resize_image(image):
 
 
 # Function to split message length
-def split_message(text, max_length=4096):
+def split_message(text, max_length=4090):
     return [text[i : i + max_length] for i in range(0, len(text), max_length)]
 
 
@@ -78,7 +81,6 @@ async def vision(image_path):
             result = model.answer_question(enc_image, description_prompt, tokenizer)
             return result
 
-        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(executor, process_image)
         return result
     except Exception as e:
@@ -86,36 +88,46 @@ async def vision(image_path):
         raise
 
 
+async def run_vision(message, command):
+    download_folder = os.path.join(os.getcwd(), "downloads")
+    os.makedirs(download_folder, exist_ok=True)
+    image_path = os.path.join(download_folder, "image.jpg")
+    # Download photo and get full file path
+    if command:
+        file_path = await message.reply_to_message.download(file_name=image_path)
+    else:
+        file_path = await message.download(file_name=image_path)
+    logger.info(f"Image saved to: {file_path}")
+
+    if not file_path:
+        await message.reply_text("Failed to download the image.")
+        return
+
+    x = await message.reply_text("Processing image...")
+    try:
+        result = await vision(file_path)
+        if len(result) > 4090:
+            for msg in split_message(result):
+                await message.reply_text(msg)
+        else:
+            await message.reply_text(result)
+        await x.delete()
+    except FileNotFoundError as e:
+        await message.reply_text(f"Error: {e}")
+    except Exception as e:
+        await message.reply_text(f"An unexpected error occurred: {e}")
+    finally:
+        # Delete the file
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.info(f"Deleted file: {file_path}")
+
+
 # Image processing command
 @bot.on_message(filters.photo)
 async def process_image(bot, message):
     if autoVision:
-        download_folder = os.path.join(os.getcwd(), "downloads")
-        os.makedirs(download_folder, exist_ok=True)
-        image_path = os.path.join(download_folder, "image.jpg")
-
-        # Download photo and get full file path
-        file_path = await message.download(file_name=image_path)
-        logger.info(f"Image saved to: {file_path}")
-
-        if not file_path:
-            await message.reply_text("Failed to download the image.")
-            return
-
-        await message.reply_text("Processing image...")
-        try:
-            result = await vision(file_path)
-            for msg in split_message(result):
-                await message.reply_text(msg)
-        except FileNotFoundError as e:
-            await message.reply_text(f"Error: {e}")
-        except Exception as e:
-            await message.reply_text(f"An unexpected error occurred: {e}")
-        finally:
-            # Delete the file
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                logger.info(f"Deleted file: {file_path}")
+        await run_vision(message=message, command=False)
 
 
 # Start command
@@ -130,7 +142,7 @@ async def start_command(bot, message):
         "`/autovision` - Toggle AutoVision mode.\n\n"
         "**Status:**\n"
         f"AutoVision mode: `{'enabled' if autoVision else 'disabled'}`\n\n"
-        f"**Model:** `{model_id}`\n"
+        f"**Model:** `{model_id}` | **Version:** `{Version}`"
     )
 
 # /autovision command
@@ -153,18 +165,6 @@ async def autovision_command(bot, message):
     else:
         await message.reply_text("Usage: `/autovision` [on/off]")
 
-# Ping command
-@bot.on_message(filters.command(["ping"]))
-async def ping_command(bot, message):
-    start_time = time.time()  # Start time before sending reply
-    reply = await message.reply_text("Calculating latency...")
-    end_time = time.time()  # End time after sending reply
-    
-    # Calculate latency in milliseconds
-    latency = (end_time - start_time) * 1000
-    
-    # Update the message with latency
-    await reply.edit_text(f"**Latency:** `{latency:.2f}`ms")
 
 # /vision command (get replied image and describe it)
 @bot.on_message(filters.command(["vision"]))
@@ -174,23 +174,22 @@ async def vision_command(bot, message):
         return
 
     if message.reply_to_message.photo:
-        await message.reply_text("Processing image...")
-        try:
-            image_path = await message.reply_to_message.download()
-            result = await vision(image_path)
-            for msg in split_message(result):
-                await message.reply_text(msg)
-        except FileNotFoundError as e:
-            await message.reply_text(f"Error: {e}")
-        except Exception as e:
-            await message.reply_text(f"An unexpected error occurred: {e}")
-        finally:
-            # Delete the file
-            if os.path.exists(image_path):
-                os.remove(image_path)
-                logger.info(f"Deleted file: {image_path}")
+        await run_vision(message=message.reply_to_message, command=True)
     else:
         await message.reply_text("Reply to an image to describe it.")
+
+
+# Ping command
+@bot.on_message(filters.command(["ping"]))
+async def ping_command(bot, message):
+    start_time = time.time()  # Start time before sending reply
+    reply = await message.reply_text("Calculating latency...")
+    end_time = time.time()  # End time after sending reply
+    # Calculate latency in milliseconds
+    latency = (end_time - start_time) * 1000
+    # Update the message with latency
+    await reply.edit_text(f"**Latency:** `{latency:.2f}`ms")
+
 
 # Main function
 async def main():
